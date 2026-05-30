@@ -37,27 +37,62 @@ REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, TOKEN_URL, REVOKE_URL)
 
 # =====================================================================
-# 3. BARRA LATERAL (LOGIN DO GOOGLE E CONTROLES)
+# 3. FUNÇÕES DO BANCO DE DADOS (SALVAR E BUSCAR)
+# =====================================================================
+def salvar_no_banco(nome, pergunta, resposta):
+    try:
+        conn = psycopg2.connect(URL_BANCO)
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO historico_conversas (usuario, mensagem_usuario, resposta_ia)
+            VALUES (%s, %s, %s);
+        """
+        cursor.execute(query, (nome, pergunta, resposta))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"⚠️ Erro ao salvar no banco de dados: {e}")
+
+def buscar_mensagens_recentes(nome):
+    try:
+        conn = psycopg2.connect(URL_BANCO)
+        cursor = conn.cursor()
+        # Busca as últimas 10 interações filtrando pelo nome do usuário logado
+        query = """
+            SELECT mensagem_usuario, resposta_ia 
+            FROM historico_conversas 
+            WHERE usuario = %s 
+            ORDER BY id DESC 
+            LIMIT 10;
+        """
+        cursor.execute(query, (nome,))
+        registros = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return registros
+    except Exception as e:
+        # Retorna uma lista vazia e não trava o app se o banco falhar
+        print(f"Erro ao buscar histórico: {e}")
+        return []
+
+# =====================================================================
+# 4. BARRA LATERAL (LOGIN, HISTÓRICO LOCAL E MENSAGENS RECENTES DO BANCO)
 # =====================================================================
 with st.sidebar:
     st.header("👤 Acesso ao Sistema")
     
-    # Verifica se o usuário JÁ está logado
     if "user_info" not in st.session_state:
-        st.write("Faça login com o Google para conversar com o Mestre Cervejeiro.")
-        
-        # Botão de Login
         result = oauth2.authorize_button(
             name="Entrar com o Google",
             icon="https://www.google.com.br/favicon.ico",
             redirect_uri=REDIRECT_URI,
             scope="openid email profile",
-            key="google_login",
-            extras_params={"prompt": "consent", "access_type": "offline"},
+            key="google_login_persistent",
+            extras_params={"prompt": "select_account", "access_type": "offline"},
             use_container_width=True
         )
         
-        # Se o login der certo, extrai os dados do Google
         if result and "token" in result:
             id_token = result["token"]["id_token"]
             payload = id_token.split(".")[1]
@@ -66,9 +101,9 @@ with st.sidebar:
             
             st.session_state.user_info = user_data
             st.rerun() 
-    else:
-        # Se já estiver logado, mostra a foto e o nome
-        nome_usuario = st.session_state.user_info.get("name", "Cervejeiro")
+    
+    if "user_info" in st.session_state:
+        nome_usuario = st.session_state.user_info.get("name", "Usuário")
         foto_usuario = st.session_state.user_info.get("picture", "")
         
         col1, col2 = st.columns([1, 3])
@@ -86,16 +121,36 @@ with st.sidebar:
             
         st.write("---")
         st.header("⚙️ Painel do Mestre")
-        if st.button("🗑️ Limpar Histórico do Chat"):
+        if st.button("🗑️ Limpar Tela do Chat"):
             if "chat" in st.session_state:
                 del st.session_state.chat
             st.rerun()
+            
+        # -----------------------------------------------------------------
+        # NOVA SEÇÃO: EXIBIÇÃO DE MENSAGENS RECENTES SALVAS NO SUPABASE
+        # -----------------------------------------------------------------
+        st.write("---")
+        st.header("📜 Mensagens Recentes")
+        st.write("Aqui estão as suas últimas dúvidas salvas no banco:")
+        
+        historico_banco = buscar_mensagens_recentes(nome_usuario)
+        
+        if historico_banco:
+            for i, (pergunta_antiga, resposta_antiga) in enumerate(historico_banco):
+                # Cria uma caixinha expansível (dropdown) para cada pergunta antiga
+                # Resumi o título para os primeiros 30 caracteres para ficar organizado
+                titulo_aba = f"💬 {pergunta_antiga[:30]}..." if len(pergunta_antiga) > 30 else f"💬 {pergunta_antiga}"
+                with st.expander(titulo_aba):
+                    st.markdown(f"**Você:** {pergunta_antiga}")
+                    st.markdown(f"**Mia:** {resposta_antiga}")
+        else:
+            st.caption("Nenhuma conversa antiga encontrada para este usuário.")
 
 # =====================================================================
-# 4. LÓGICA PRINCIPAL (SÓ APARECE SE ESTIVER LOGADO)
+# 5. LÓGICA PRINCIPAL (SÓ APARECE SE ESTIVER LOGADO)
 # =====================================================================
 if "user_info" in st.session_state:
-    nome_usuario = st.session_state.user_info.get("name", "Cervejeiro")
+    nome_usuario = st.session_state.user_info.get("name", "Usuário")
     
     instrucoes_mestre = f"""
     Você é um especialista em processos de produção de bebidas, focado em ajudar com dúvidas sobre insumos, tempos e boas práticas de fabricação.
@@ -109,23 +164,7 @@ if "user_info" in st.session_state:
         )
         st.session_state.chat = modelo.start_chat(history=[])
 
-    # FUNÇÃO CORRIGIDA PARA SALVAR NO BANCO COM EXIBIÇÃO DE ERROS
-    def salvar_no_banco(nome, pergunta, resposta):
-        try:
-            conn = psycopg2.connect(URL_BANCO)
-            cursor = conn.cursor()
-            query = """
-                INSERT INTO historico_conversas (usuario, mensagem_usuario, resposta_ia)
-                VALUES (%s, %s, %s);
-            """
-            cursor.execute(query, (nome, pergunta, resposta))
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            st.error(f"⚠️ Erro ao salvar no banco de dados: {e}")
-
-    # Exibe o histórico de mensagens na tela
+    # Exibe o histórico de mensagens ativo na tela
     for mensagem in st.session_state.chat.history:
         papel = "user" if mensagem.role == "user" else "assistant"
         with st.chat_message(papel):
@@ -147,7 +186,7 @@ if "user_info" in st.session_state:
             pergunta_final = "Me dê dicas rápidas sobre controle de temperatura na fermentação."
     with col_b3:
         if st.button("💧 Água para Brassagem"):
-            pergeant_final = "Qual a importância do controle do PH da água?"
+            pergunta_final = "Qual a importância do controle do PH da água?"
 
     texto_digitado = st.chat_input("Ou digite sua dúvida aqui...")
 
@@ -156,12 +195,11 @@ if "user_info" in st.session_state:
     elif audio_gravado and not pergunta_final:
         with st.spinner("Entendendo o áudio..."):
             dados_audio = {"mime_type": "audio/wav", "data": audio_gravado.getvalue()}
-            instruco_tradutor = """Sua tarefa é ouvir o áudio e transcrever o que a pessoa disse, corrigindo jargões cervejeiros."""
+            instruco_tradutor = """Sua tarefa é ouvir o áudio e transcrever o que a pessoa disse, corrigindo jargões técnicos."""
             modelo_tradutor = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=instruco_tradutor)
             resposta_traducao = modelo_tradutor.generate_content(["Transcreva exatamente:", dados_audio])
             pergunta_final = resposta_traducao.text
 
-    # Se houver uma pergunta (via texto, áudio ou botão rápido)
     if pergunta_final:
         with st.chat_message("user"):
             st.markdown(pergunta_final)
@@ -175,9 +213,10 @@ if "user_info" in st.session_state:
                     
             texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
         
-        # Chama a função para salvar passando as variáveis corretas
+        # Salva a nova conversa no banco de dados
         salvar_no_banco(nome_usuario, pergunta_final, texto_completo_resposta)
+        # Recarrega o app para atualizar imediatamente a lista lateral de mensagens recentes
+        st.rerun()
 
 else:
-    # Mensagem para quem não está logado
     st.info("👈 Faça login na barra lateral para começar a conversar com o Mestre Cervejeiro e liberar as funcionalidades!")
