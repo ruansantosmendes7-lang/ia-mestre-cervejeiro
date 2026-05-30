@@ -3,8 +3,8 @@ import google.generativeai as genai
 import psycopg2
 import base64
 import json
-import hashlib
 from streamlit_oauth import OAuth2Component
+from streamlit_local_storage import LocalStorage
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E DESIGN
@@ -33,10 +33,8 @@ genai.configure(api_key=CHAVE_API)
 
 oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", "https://oauth2.googleapis.com/token", "https://oauth2.googleapis.com/revoke")
 
-# Gera uma assinatura única baseada nos dados de conexão do navegador do usuário
-def obter_id_navegador():
-    info_headers = str(st.context.headers.get("User-Agent", "")) + str(st.context.headers.get("X-Forwarded-For", ""))
-    return hashlib.sha256(info_headers.encode()).hexdigest()
+# Inicializa o gerenciador de armazenamento do navegador
+local_storage = LocalStorage()
 
 # =====================================================================
 # 3. FUNÇÕES DO BANCO DE DADOS SUPABASE
@@ -66,61 +64,17 @@ def buscar_mensagens_recentes(nome):
     except Exception as e:
         return []
 
-def salvar_sessao_banco(chave, nome, foto):
-    try:
-        conn = psycopg2.connect(URL_BANCO)
-        cursor = conn.cursor()
-        query = """
-            INSERT INTO sessoes_ativas (chave_conexao, usuario_nome, usuario_foto, atualizado_em)
-            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (chave_conexao) 
-            DO UPDATE SET usuario_nome = EXCLUDED.usuario_nome, usuario_foto = EXCLUDED.usuario_foto, atualizado_em = CURRENT_TIMESTAMP;
-        """
-        cursor.execute(query, (chave, nome, foto))
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        pass
-
-def buscar_sessao_banco(chave):
-    try:
-        conn = psycopg2.connect(URL_BANCO)
-        cursor = conn.cursor()
-        query = "SELECT usuario_nome, usuario_foto FROM sessoes_ativas WHERE chave_conexao = %s LIMIT 1;"
-        cursor.execute(query, (chave,))
-        resultado = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return resultado
-    except Exception as e:
-        return None
-
-def deletar_sessao_banco(chave):
-    try:
-        conn = psycopg2.connect(URL_BANCO)
-        cursor = conn.cursor()
-        query = "DELETE FROM sessoes_ativas WHERE chave_conexao = %s;"
-        cursor.execute(query, (chave,))
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        pass
-
 # =====================================================================
-# 4. CONTROLE DE SESSÃO E LOGIN (PERSISTÊNCIA COMPLETA)
+# 4. CONTROLE DE SESSÃO COM LOCAL STORAGE (PERSISTÊNCIA REAL)
 # =====================================================================
-id_dispositivo = obter_id_navegador()
-
-# Se não está no session_state, tenta pescar a sessão direto do Supabase
+# Tenta colher o usuário salvo no navegador do usuário
 if "user_info" not in st.session_state:
-    sessao_guardada = buscar_sessao_banco(id_dispositivo)
-    if sessao_guardada:
-        st.session_state.user_info = {
-            "name": sessao_guardada[0],
-            "picture": sessao_guardada[1]
-        }
+    usuario_salvo = local_storage.getItem("mestre_user_session")
+    if usuario_salvo:
+        try:
+            st.session_state.user_info = json.loads(usuario_salvo)
+        except:
+            pass
 
 with st.sidebar:
     st.header("👤 Acesso ao Sistema")
@@ -143,8 +97,8 @@ with st.sidebar:
             user_data = json.loads(base64.b64decode(payload).decode("utf-8"))
             
             st.session_state.user_info = user_data
-            # Salva no banco de dados para lembrar no F5
-            salvar_sessao_banco(id_dispositivo, user_data.get("name"), user_data.get("picture"))
+            # Grava no armazenamento permanente do navegador do usuário
+            local_storage.setItem("mestre_user_session", json.dumps(user_data))
             st.rerun() 
     
     if "user_info" in st.session_state:
@@ -159,7 +113,7 @@ with st.sidebar:
             st.write(f"Olá, **{nome_usuario}**!")
             
         if st.button("Sair da Conta"):
-            deletar_sessao_banco(id_dispositivo)
+            local_storage.removeItem("mestre_user_session")
             del st.session_state.user_info
             if "chat" in st.session_state:
                 del st.session_state.chat
