@@ -1,6 +1,9 @@
 import streamlit as st
 import google.generativeai as genai
 import psycopg2
+import base64
+import json
+from streamlit_oauth import OAuth2Component
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E DESIGN
@@ -21,8 +24,17 @@ st.title("🍺 IA Mestre Cervejeiro")
 # =====================================================================
 CHAVE_API = st.secrets["CHAVE_API"]
 URL_BANCO = st.secrets["URL_BANCO"]
+CLIENT_ID = st.secrets["GOOGLE_CLIENT_ID"]
+CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
+REDIRECT_URI = st.secrets["REDIRECT_URI"]
 
 genai.configure(api_key=CHAVE_API)
+
+# Configuração do componente de Login do Google
+AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, TOKEN_URL, REVOKE_URL)
 
 # =====================================================================
 # 3. FUNÇÕES DO BANCO DE DADOS SUPABASE
@@ -37,7 +49,7 @@ def salvar_no_banco(nome, pergunta, resposta):
         cursor.close()
         conn.close()
     except Exception as e:
-        st.error(f"⚠️ Erro ao salvar no banco de dados: {e}")
+        st.error(f"⚠️ Erro ao salvar histórico no banco: {e}")
 
 def buscar_mensagens_recentes(nome):
     try:
@@ -52,25 +64,109 @@ def buscar_mensagens_recentes(nome):
     except Exception as e:
         return []
 
+def salvar_sessao_banco(email, nome, foto):
+    try:
+        conn = psycopg2.connect(URL_BANCO)
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO sessoes_ativas (email_usuario, usuario_nome, usuario_foto, atualizado_em)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (email_usuario) 
+            DO UPDATE SET usuario_nome = EXCLUDED.usuario_nome, usuario_foto = EXCLUDED.usuario_foto, atualizado_em = CURRENT_TIMESTAMP;
+        """
+        cursor.execute(query, (email, nome, foto))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        pass
+
+def buscar_ultima_sessao():
+    try:
+        conn = psycopg2.connect(URL_BANCO)
+        cursor = conn.cursor()
+        query = "SELECT usuario_nome, usuario_foto FROM sessoes_ativas ORDER BY atualizado_em DESC LIMIT 1;"
+        cursor.execute(query)
+        resultado = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return resultado
+    except Exception as e:
+        return None
+
+def limpar_todas_sessoes():
+    try:
+        conn = psycopg2.connect(URL_BANCO)
+        cursor = conn.cursor()
+        query = "DELETE FROM sessoes_ativas;"
+        cursor.execute(query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        pass
+
 # =====================================================================
-# 4. PAINEL DE ACESSO (BARRA LATERAL ESTÁVEL)
+# 4. BARRA LATERAL (LOGIN DO GOOGLE COM PERSISTÊNCIA)
 # =====================================================================
+# Tenta recuperar o último login do banco de dados caso tenha dado F5
+if "user_info" not in st.session_state:
+    sessao_recuperada = buscar_ultima_sessao()
+    if sessao_recuperada:
+        st.session_state.user_info = {
+            "name": sessao_recuperada[0],
+            "picture": sessao_recuperada[1]
+        }
+
 with st.sidebar:
-    st.header("👤 Identificação")
+    st.header("👤 Acesso ao Sistema")
     
-    # Lista de usuários autorizados (adicione os nomes dos seus amigos aqui)
-    usuarios_permitidos = ["Selecione...", "Juan", "Visitante"]
-    
-    # O Streamlit guarda a seleção do combo mesmo com atualizações leves
-    nome_usuario = st.selectbox(
-        "Quem está acessando o sistema?",
-        options=usuarios_permitidos,
-        key="usuario_ativo"
-    )
-    
-    if nome_usuario != "Selecione...":
-        st.success(f"Conectado como: **{nome_usuario}**")
+    if "user_info" not in st.session_state:
+        st.write("Faça login com o Google para acessar.")
         
+        result = oauth2.authorize_button(
+            name="Entrar com o Google",
+            icon="https://www.google.com.br/favicon.ico",
+            redirect_uri=REDIRECT_URI,
+            scope="openid email profile",
+            key="google_login_main",
+            extras_params={"prompt": "select_account", "access_type": "offline"},
+            use_container_width=True
+        )
+        
+        if result and "token" in result:
+            id_token = result["token"]["id_token"]
+            payload = id_token.split(".")[1]
+            payload += "=" * ((4 - len(payload) % 4) % 4)
+            user_data = json.loads(base64.b64decode(payload).decode("utf-8"))
+            
+            st.session_state.user_info = user_data
+            
+            # Salva o login no Supabase para lembrar no F5
+            salvar_sessao_banco(
+                user_data.get("email", "indisponivel"), 
+                user_data.get("name", "Cervejeiro"), 
+                user_data.get("picture", "")
+            )
+            st.rerun() 
+    else:
+        nome_usuario = st.session_state.user_info.get("name", "Cervejeiro")
+        foto_usuario = st.session_state.user_info.get("picture", "")
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if foto_usuario:
+                st.image(foto_usuario, width=50)
+        with col2:
+            st.write(f"Olá, **{nome_usuario}**!")
+            
+        if st.button("Sair da Conta"):
+            limpar_todas_sessoes()
+            del st.session_state.user_info
+            if "chat" in st.session_state:
+                del st.session_state.chat
+            st.rerun()
+            
         st.write("---")
         st.header("⚙️ Painel do Mestre")
         if st.button("🗑️ Limpar Tela do Chat"):
@@ -88,20 +184,20 @@ with st.sidebar:
                     st.markdown(f"**Você:** {pergunta_antiga}")
                     st.markdown(f"**Mia:** {resposta_antiga}")
         else:
-            st.caption("Nenhuma conversa antiga encontrada para este usuário.")
+            st.caption("Nenhuma conversa antiga encontrada.")
 
 # =====================================================================
-# 5. LÓGICA DO CHAT (SÓ EXECUTA APÓS SELECIONAR UM USUÁRIO)
+# 5. LÓGICA DO CHAT (SÓ EXECUTA LOGADO)
 # =====================================================================
-if nome_usuario != "Selecione...":
+if "user_info" in st.session_state:
+    nome_usuario = st.session_state.user_info.get("name", "Cervejeiro")
     
-    instrucoes_mestre = f"Você é uma especialista em produção de bebidas chamada Mia. Ajude de forma clara e amigável. O nome do usuário conectado é {nome_usuario}."
+    instrucoes_mestre = f"Você é uma especialista em produção de bebidas chamada Mia. Ajude de forma clara. O nome do usuário é {nome_usuario}."
 
     if "chat" not in st.session_state:
         modelo = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=instrucoes_mestre)
         st.session_state.chat = modelo.start_chat(history=[])
 
-    # Renderiza o histórico da sessão atual
     for message in st.session_state.chat.history:
         papel = "user" if message.role == "user" else "assistant"
         with st.chat_message(papel):
@@ -127,7 +223,7 @@ if nome_usuario != "Selecione...":
     elif audio_gravado and not pergunta_final:
         with st.spinner("Entendendo o áudio..."):
             dados_audio = {"mime_type": "audio/wav", "data": audio_gravado.getvalue()}
-            modelo_tradutor = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction="Transcreva o áudio de forma limpa.")
+            modelo_tradutor = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction="Transcreva o áudio.")
             resposta_traducao = modelo_tradutor.generate_content(["Transcreva exatamente:", dados_audio])
             pergunta_final = resposta_traducao.text
 
@@ -141,11 +237,11 @@ if nome_usuario != "Selecione...":
                     for pedaco in resposta_em_pedacos: yield pedaco.text
                 texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
                 
-                # Salva no banco de dados vinculando ao nome selecionado
+                # Salva a mensagem no Supabase
                 salvar_no_banco(nome_usuario, pergunta_final, texto_completo_resposta)
                 st.rerun()
             except Exception as e:
                 st.error("O limite gratuito de perguntas por minuto do Google Gemini foi atingido. Por favor, aguarde de 1 a 2 minutos e envie sua mensagem novamente!")
 
 else:
-    st.info("👈 Por favor, selecione quem está acessando na barra lateral para liberar o chat com a Mia!")
+    st.info("👈 Faça login com o Google na barra lateral para começar a conversar com a Mia!")
