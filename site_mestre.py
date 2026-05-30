@@ -1,8 +1,9 @@
 import streamlit as st
 import google.generativeai as genai
+import psycopg2  # Biblioteca para conectar ao banco de dados Supabase
 
 # =====================================================================
-# 1. CONFIGURAÇÃO DA PÁGINA AND DESIGN (LETRAS MAIORES)
+# 1. CONFIGURAÇÃO DA PÁGINA E DESIGN (LETRAS MAIORES)
 # =====================================================================
 st.set_page_config(page_title="Mestre Cervejeiro", page_icon="🍺")
 
@@ -22,17 +23,37 @@ st.title("🍺 IA Mestre Cervejeiro")
 st.write("Fale no microfone, use os botões rápidos ou digite sua dúvida!")
 
 # =====================================================================
-# 2. CONFIGURAÇÃO DA CHAVE DE API E PERSONALIDADE
+# 2. CONFIGURAÇÃO DAS CHAVES (API E BANCO DE DADOS)
 # =====================================================================
+# Puxando as chaves que você configurou nos Secrets do Streamlit
 CHAVE_API = st.secrets["CHAVE_API"]
+URL_BANCO = st.secrets["URL_BANCO"]
+
 genai.configure(api_key=CHAVE_API)
 
 instrucoes_mestre = """
 Você é um especialista em processos de produção de bebidas, focado em ajudar com dúvidas sobre insumos, tempos e boas práticas de fabricação de forma clara e técnica.
 """
 
+# Função para salvar a conversa no Supabase
+def salvar_no_banco(pergunta, resposta):
+    try:
+        conn = psycopg2.connect(URL_BANCO)
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO historico_conversas (usuario, mensagem_usuario, resposta_ia)
+            VALUES (%s, %s, %s);
+        """
+        cursor.execute(query, ("Visitante", pergunta, resposta))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        # Se der erro no banco, o site não cai, apenas avisa no terminal
+        print(f"Erro ao salvar no banco de dados: {e}")
+
 # =====================================================================
-# 3. GERENCIAMENTO DA MEMÓRIA E NOVA BARRA LATERAL
+# 3. GERENCIAMENTO DA MEMÓRIA E BARRA LATERAL
 # =====================================================================
 # Inicializa o modelo e o chat se não existirem
 if "chat" not in st.session_state:
@@ -42,7 +63,7 @@ if "chat" not in st.session_state:
     )
     st.session_state.chat = modelo.start_chat(history=[])
 
-# MELHORIA 2: Barra lateral profissional com botão de Reset
+# Barra lateral profissional com botão de Reset
 with st.sidebar:
     st.header("⚙️ Painel do Mestre")
     st.write("Use o botão abaixo para reiniciar o chat do zero se a conversa ficar muito longa.")
@@ -69,7 +90,7 @@ pergunta_final = None
 st.write("---")
 audio_gravado = st.audio_input("🎙️ Clique para falar e aguarde o envio automático")
 
-# MELHORIA 1: Botões de sugestão para cliques rápidos
+# Botões de sugestão para cliques rápidos
 st.write("👉 Ideias prontas para testar o robô:")
 col_b1, col_b2, col_b3 = st.columns(3)
 
@@ -89,7 +110,6 @@ texto_digitado = st.chat_input("Ou digite sua dúvida aqui...")
 # Definição de qual entrada foi acionada
 if texto_digitado:
     pergunta_final = texto_digitado
-
 elif audio_gravado and not pergunta_final:
     with st.spinner("Entendendo o áudio..."):
         dados_audio = {
@@ -115,7 +135,7 @@ elif audio_gravado and not pergunta_final:
         pergunta_final = resposta_traducao.text
 
 # =====================================================================
-# 5. PROCESSAMENTO E EXIBIÇÃO DA RESPOSTA (STREAMING)
+# 5. PROCESSAMENTO, EXIBIÇÃO E SALVAMENTO NO BANCO
 # =====================================================================
 if pergunta_final:
     with st.chat_message("user"):
@@ -128,4 +148,8 @@ if pergunta_final:
             for pedaco in resposta_em_pedacos:
                 yield pedaco.text
                 
-        st.write_stream(extrair_texto(resposta_streaming))
+        # st.write_stream retorna o texto completo após terminar o streaming
+        texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
+    
+    # SALVA NO BANCO DE DADOS APÓS EXIBIR A RESPOSTA
+    salvar_no_banco(pergunta_final, texto_completo_resposta)
