@@ -48,10 +48,9 @@ def salvar_no_banco(nome, pergunta, resposta):
         conn.commit()
         cursor.close()
         conn.close()
-        # Feedback visual para sabermos se gravou com sucesso no Supabase
         st.toast("✅ Conversa guardada com sucesso no Supabase!")
     except Exception as e:
-        st.error(f"⚠️ Erro crítico ao salvar no banco de dados: {e}")
+        st.error(f"⚠️ Erro ao salvar no banco de dados: {e}")
 
 def buscar_mensagens_recentes(nome):
     try:
@@ -66,72 +65,21 @@ def buscar_mensagens_recentes(nome):
     except Exception as e:
         return []
 
-def salvar_sessao_banco(email, nome, foto):
-    try:
-        conn = psycopg2.connect(URL_BANCO)
-        cursor = conn.cursor()
-        query = """
-            INSERT INTO sessoes_ativas (email_usuario, usuario_nome, usuario_foto, atualizado_em)
-            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (email_usuario) 
-            DO UPDATE SET usuario_nome = EXCLUDED.usuario_nome, usuario_foto = EXCLUDED.usuario_foto, atualizado_em = CURRENT_TIMESTAMP;
-        """
-        cursor.execute(query, (email, nome, foto))
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        pass
-
-def buscar_ultima_sessao():
-    try:
-        conn = psycopg2.connect(URL_BANCO)
-        cursor = conn.cursor()
-        query = "SELECT usuario_nome, usuario_foto FROM sessoes_ativas ORDER BY atualizado_em DESC LIMIT 1;"
-        cursor.execute(query)
-        resultado = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        return resultado
-    except Exception as e:
-        return None
-
-def limpar_todas_sessoes():
-    try:
-        conn = psycopg2.connect(URL_BANCO)
-        cursor = conn.cursor()
-        query = "DELETE FROM sessoes_ativas;"
-        cursor.execute(query)
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        pass
-
 # =====================================================================
-# 4. BARRA LATERAL (LOGIN DO GOOGLE COM PERSISTÊNCIA)
+# 4. BARRA LATERAL (LOGIN DO GOOGLE)
 # =====================================================================
-# Tenta recuperar a última sessão para evitar cair no F5
-if "user_info" not in st.session_state:
-    sessao_recuperada = buscar_ultima_sessao()
-    if sessao_recuperada:
-        st.session_state.user_info = {
-            "name": sessao_recuperada[0],
-            "picture": sessao_recuperada[1]
-        }
-
 with st.sidebar:
     st.header("👤 Acesso ao Sistema")
     
     if "user_info" not in st.session_state:
-        st.write("Faça login com o Google para aceder.")
+        st.write("Faça login com o Google para acessar o chat.")
         
         result = oauth2.authorize_button(
             name="Entrar com o Google",
             icon="https://www.google.com.br/favicon.ico",
             redirect_uri=REDIRECT_URI,
             scope="openid email profile",
-            key="google_login_main",
+            key="google_login_final",
             extras_params={"prompt": "select_account", "access_type": "offline"},
             use_container_width=True
         )
@@ -143,13 +91,6 @@ with st.sidebar:
             user_data = json.loads(base64.b64decode(payload).decode("utf-8"))
             
             st.session_state.user_info = user_data
-            
-            # Guarda a sessão no Supabase
-            salvar_sessao_banco(
-                user_data.get("email", "indisponivel"), 
-                user_data.get("name", "Cervejeiro"), 
-                user_data.get("picture", "")
-            )
             st.rerun() 
     else:
         nome_usuario = st.session_state.user_info.get("name", "Cervejeiro")
@@ -163,7 +104,6 @@ with st.sidebar:
             st.write(f"Olá, **{nome_usuario}**!")
             
         if st.button("Sair da Conta"):
-            limpar_todas_sessoes()
             del st.session_state.user_info
             if "chat" in st.session_state:
                 del st.session_state.chat
@@ -194,7 +134,7 @@ with st.sidebar:
 if "user_info" in st.session_state:
     nome_usuario = st.session_state.user_info.get("name", "Cervejeiro")
     
-    instrucoes_mestre = f"Você é uma especialista em produção de bebidas chamada Mia. Ajude de forma clara e amigável. O nome do usuário é {nome_usuario}."
+    instrucoes_mestre = f"Você é uma especialista em produção de bebidas chamada Mia. Ajude o {nome_usuario} de forma clara."
 
     if "chat" not in st.session_state:
         modelo = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=instrucoes_mestre)
@@ -208,16 +148,7 @@ if "user_info" in st.session_state:
     pergunta_final = None
 
     st.write("---")
-    audio_gravado = st.audio_input("🎙️ Clique para falar e aguarde o envio automático")
-
-    st.write("👉 Ideias prontas para testar o robô:")
-    col_b1, col_b2, col_b3 = st.columns(3)
-    with col_b1:
-        if st.button("🌾 O que é Dry Hopping?"): pergunta_final = "O que é Dry Hopping e para que serve?"
-    with col_b2:
-        if st.button("🌡️ Guia de Fermentação"): pergunta_final = "Me dê dicas rápidas sobre controle de temperatura na fermentação."
-    with col_b3:
-        if st.button("💧 Água para Brassagem"): pergunta_final = "Qual a importância do controle do PH da água?"
+    audio_gravado = st.audio_input("🎙️ Clique para falar e aguarde")
 
     texto_digitado = st.chat_input("Ou digite sua dúvida aqui...")
     if texto_digitado:
@@ -225,7 +156,7 @@ if "user_info" in st.session_state:
     elif audio_gravado and not pergunta_final:
         with st.spinner("Entendendo o áudio..."):
             dados_audio = {"mime_type": "audio/wav", "data": audio_gravado.getvalue()}
-            modelo_tradutor = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction="Transcreva o áudio de forma limpa.")
+            modelo_tradutor = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction="Transcreva o áudio.")
             resposta_traducao = modelo_tradutor.generate_content(["Transcreva exatamente:", dados_audio])
             pergunta_final = resposta_traducao.text
 
@@ -239,11 +170,11 @@ if "user_info" in st.session_state:
                     for pedaco in resposta_em_pedacos: yield pedaco.text
                 texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
                 
-                # Envia para a função de salvamento do banco de dados
+                # Salva no Supabase
                 salvar_no_banco(nome_usuario, pergunta_final, texto_completo_resposta)
                 st.rerun()
             except Exception as e:
-                st.error("O limite gratuito de perguntas por minuto do Google Gemini foi atingido. Por favor, aguarde de 1 a 2 minutos e envie sua mensagem novamente!")
+                st.error("Limite da API atingido. Aguarde 1 minuto.")
 
 else:
-    st.info("👈 Faça login com o Google na barra lateral para começar a conversar com a Mia!")
+    st.info("👈 Faça login com o Google na barra lateral para conversar com a Mia!")
