@@ -1,10 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
 import psycopg2
-import base64
-import json
-from streamlit_oauth import OAuth2Component
-from streamlit_local_storage import LocalStorage
 
 # =====================================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E DESIGN
@@ -25,16 +21,8 @@ st.title("🍺 IA Mestre Cervejeiro")
 # =====================================================================
 CHAVE_API = st.secrets["CHAVE_API"]
 URL_BANCO = st.secrets["URL_BANCO"]
-CLIENT_ID = st.secrets["GOOGLE_CLIENT_ID"]
-CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
-REDIRECT_URI = st.secrets["REDIRECT_URI"]
 
 genai.configure(api_key=CHAVE_API)
-
-oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", "https://oauth2.googleapis.com/token", "https://oauth2.googleapis.com/revoke")
-
-# Inicializa o gerenciador de armazenamento do navegador
-local_storage = LocalStorage()
 
 # =====================================================================
 # 3. FUNÇÕES DO BANCO DE DADOS SUPABASE
@@ -65,60 +53,24 @@ def buscar_mensagens_recentes(nome):
         return []
 
 # =====================================================================
-# 4. CONTROLE DE SESSÃO COM LOCAL STORAGE (PERSISTÊNCIA REAL)
+# 4. PAINEL DE ACESSO (BARRA LATERAL ESTÁVEL)
 # =====================================================================
-# Tenta colher o usuário salvo no navegador do usuário
-if "user_info" not in st.session_state:
-    usuario_salvo = local_storage.getItem("mestre_user_session")
-    if usuario_salvo:
-        try:
-            st.session_state.user_info = json.loads(usuario_salvo)
-        except:
-            pass
-
 with st.sidebar:
-    st.header("👤 Acesso ao Sistema")
+    st.header("👤 Identificação")
     
-    if "user_info" not in st.session_state:
-        result = oauth2.authorize_button(
-            name="Entrar com o Google",
-            icon="https://www.google.com.br/favicon.ico",
-            redirect_uri=REDIRECT_URI,
-            scope="openid email profile",
-            key="google_login_base",
-            extras_params={"prompt": "select_account", "access_type": "offline"},
-            use_container_width=True
-        )
-        
-        if result and "token" in result:
-            id_token = result["token"]["id_token"]
-            payload = id_token.split(".")[1]
-            payload += "=" * ((4 - len(payload) % 4) % 4)
-            user_data = json.loads(base64.b64decode(payload).decode("utf-8"))
-            
-            st.session_state.user_info = user_data
-            # Grava no armazenamento permanente do navegador do usuário
-            local_storage.setItem("mestre_user_session", json.dumps(user_data))
-            st.rerun() 
+    # Lista de usuários autorizados (adicione os nomes dos seus amigos aqui)
+    usuarios_permitidos = ["Selecione...", "Juan", "Visitante"]
     
-    if "user_info" in st.session_state:
-        nome_usuario = st.session_state.user_info.get("name", "Usuário")
-        foto_usuario = st.session_state.user_info.get("picture", "")
+    # O Streamlit guarda a seleção do combo mesmo com atualizações leves
+    nome_usuario = st.selectbox(
+        "Quem está acessando o sistema?",
+        options=usuarios_permitidos,
+        key="usuario_ativo"
+    )
+    
+    if nome_usuario != "Selecione...":
+        st.success(f"Conectado como: **{nome_usuario}**")
         
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            if foto_usuario:
-                st.image(foto_usuario, width=50)
-        with col2:
-            st.write(f"Olá, **{nome_usuario}**!")
-            
-        if st.button("Sair da Conta"):
-            local_storage.removeItem("mestre_user_session")
-            del st.session_state.user_info
-            if "chat" in st.session_state:
-                del st.session_state.chat
-            st.rerun()
-            
         st.write("---")
         st.header("⚙️ Painel do Mestre")
         if st.button("🗑️ Limpar Tela do Chat"):
@@ -136,20 +88,20 @@ with st.sidebar:
                     st.markdown(f"**Você:** {pergunta_antiga}")
                     st.markdown(f"**Mia:** {resposta_antiga}")
         else:
-            st.caption("Nenhuma conversa antiga encontrada.")
+            st.caption("Nenhuma conversa antiga encontrada para este usuário.")
 
 # =====================================================================
-# 5. LÓGICA DO CHAT (SÓ EXECUTA LOGADO)
+# 5. LÓGICA DO CHAT (SÓ EXECUTA APÓS SELECIONAR UM USUÁRIO)
 # =====================================================================
-if "user_info" in st.session_state:
-    nome_usuario = st.session_state.user_info.get("name", "Usuário")
+if nome_usuario != "Selecione...":
     
-    instrucoes_mestre = f"Você é um especialista em produção de bebidas. Ajude de forma clara. O nome do usuário é {nome_usuario}."
+    instrucoes_mestre = f"Você é uma especialista em produção de bebidas chamada Mia. Ajude de forma clara e amigável. O nome do usuário conectado é {nome_usuario}."
 
     if "chat" not in st.session_state:
         modelo = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=instrucoes_mestre)
         st.session_state.chat = modelo.start_chat(history=[])
 
+    # Renderiza o histórico da sessão atual
     for message in st.session_state.chat.history:
         papel = "user" if message.role == "user" else "assistant"
         with st.chat_message(papel):
@@ -188,10 +140,12 @@ if "user_info" in st.session_state:
                 def extrair_texto(resposta_em_pedacos):
                     for pedaco in resposta_em_pedacos: yield pedaco.text
                 texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
+                
+                # Salva no banco de dados vinculando ao nome selecionado
                 salvar_no_banco(nome_usuario, pergunta_final, texto_completo_resposta)
                 st.rerun()
             except Exception as e:
                 st.error("O limite gratuito de perguntas por minuto do Google Gemini foi atingido. Por favor, aguarde de 1 a 2 minutos e envie sua mensagem novamente!")
 
 else:
-    st.info("👈 Faça login na barra lateral para começar a conversar com o Mestre Cervejeiro e liberar as funcionalidades!")
+    st.info("👈 Por favor, selecione quem está acessando na barra lateral para liberar o chat com a Mia!")
