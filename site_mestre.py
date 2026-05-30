@@ -48,8 +48,10 @@ def salvar_no_banco(nome, pergunta, resposta):
         conn.commit()
         cursor.close()
         conn.close()
+        # Feedback visual para sabermos se gravou com sucesso no Supabase
+        st.toast("✅ Conversa guardada com sucesso no Supabase!")
     except Exception as e:
-        st.error(f"⚠️ Erro ao salvar histórico no banco: {e}")
+        st.error(f"⚠️ Erro crítico ao salvar no banco de dados: {e}")
 
 def buscar_mensagens_recentes(nome):
     try:
@@ -109,7 +111,7 @@ def limpar_todas_sessoes():
 # =====================================================================
 # 4. BARRA LATERAL (LOGIN DO GOOGLE COM PERSISTÊNCIA)
 # =====================================================================
-# Tenta recuperar o último login do banco de dados caso tenha dado F5
+# Tenta recuperar a última sessão para evitar cair no F5
 if "user_info" not in st.session_state:
     sessao_recuperada = buscar_ultima_sessao()
     if sessao_recuperada:
@@ -122,7 +124,7 @@ with st.sidebar:
     st.header("👤 Acesso ao Sistema")
     
     if "user_info" not in st.session_state:
-        st.write("Faça login com o Google para acessar.")
+        st.write("Faça login com o Google para aceder.")
         
         result = oauth2.authorize_button(
             name="Entrar com o Google",
@@ -142,7 +144,7 @@ with st.sidebar:
             
             st.session_state.user_info = user_data
             
-            # Salva o login no Supabase para lembrar no F5
+            # Guarda a sessão no Supabase
             salvar_sessao_banco(
                 user_data.get("email", "indisponivel"), 
                 user_data.get("name", "Cervejeiro"), 
@@ -192,7 +194,7 @@ with st.sidebar:
 if "user_info" in st.session_state:
     nome_usuario = st.session_state.user_info.get("name", "Cervejeiro")
     
-    instrucoes_mestre = f"Você é uma especialista em produção de bebidas chamada Mia. Ajude de forma clara. O nome do usuário é {nome_usuario}."
+    instrucoes_mestre = f"Você é uma especialista em produção de bebidas chamada Mia. Ajude de forma clara e amigável. O nome do usuário é {nome_usuario}."
 
     if "chat" not in st.session_state:
         modelo = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction=instrucoes_mestre)
@@ -223,7 +225,7 @@ if "user_info" in st.session_state:
     elif audio_gravado and not pergunta_final:
         with st.spinner("Entendendo o áudio..."):
             dados_audio = {"mime_type": "audio/wav", "data": audio_gravado.getvalue()}
-            modelo_tradutor = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction="Transcreva o áudio.")
+            modelo_tradutor = genai.GenerativeModel(model_name='gemini-2.5-flash', system_instruction="Transcreva o áudio de forma limpa.")
             resposta_traducao = modelo_tradutor.generate_content(["Transcreva exatamente:", dados_audio])
             pergunta_final = resposta_traducao.text
 
@@ -237,7 +239,7 @@ if "user_info" in st.session_state:
                     for pedaco in resposta_em_pedacos: yield pedaco.text
                 texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
                 
-                # Salva a mensagem no Supabase
+                # Envia para a função de salvamento do banco de dados
                 salvar_no_banco(nome_usuario, pergunta_final, texto_completo_resposta)
                 st.rerun()
             except Exception as e:
