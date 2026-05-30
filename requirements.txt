@@ -1,3 +1,4 @@
 streamlit
 google-generativeai
 psycopg2-binary
+streamlit-oauth
