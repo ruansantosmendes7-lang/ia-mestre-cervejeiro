@@ -109,6 +109,7 @@ if "user_info" in st.session_state:
         )
         st.session_state.chat = modelo.start_chat(history=[])
 
+    # FUNÇÃO CORRIGIDA PARA SALVAR NO BANCO COM EXIBIÇÃO DE ERROS
     def salvar_no_banco(nome, pergunta, resposta):
         try:
             conn = psycopg2.connect(URL_BANCO)
@@ -122,8 +123,9 @@ if "user_info" in st.session_state:
             cursor.close()
             conn.close()
         except Exception as e:
-            print(f"Erro ao salvar no banco de dados: {e}")
+            st.error(f"⚠️ Erro ao salvar no banco de dados: {e}")
 
+    # Exibe o histórico de mensagens na tela
     for mensagem in st.session_state.chat.history:
         papel = "user" if mensagem.role == "user" else "assistant"
         with st.chat_message(papel):
@@ -145,7 +147,7 @@ if "user_info" in st.session_state:
             pergunta_final = "Me dê dicas rápidas sobre controle de temperatura na fermentação."
     with col_b3:
         if st.button("💧 Água para Brassagem"):
-            pergunta_final = "Qual a importância do controle do PH da água?"
+            pergeant_final = "Qual a importância do controle do PH da água?"
 
     texto_digitado = st.chat_input("Ou digite sua dúvida aqui...")
 
@@ -159,6 +161,7 @@ if "user_info" in st.session_state:
             resposta_traducao = modelo_tradutor.generate_content(["Transcreva exatamente:", dados_audio])
             pergunta_final = resposta_traducao.text
 
+    # Se houver uma pergunta (via texto, áudio ou botão rápido)
     if pergunta_final:
         with st.chat_message("user"):
             st.markdown(pergunta_final)
@@ -172,7 +175,9 @@ if "user_info" in st.session_state:
                     
             texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
         
+        # Chama a função para salvar passando as variáveis corretas
         salvar_no_banco(nome_usuario, pergunta_final, texto_completo_resposta)
 
 else:
+    # Mensagem para quem não está logado
     st.info("👈 Faça login na barra lateral para começar a conversar com o Mestre Cervejeiro e liberar as funcionalidades!")
