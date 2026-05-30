@@ -45,10 +45,18 @@ for mensagem in st.session_state.chat.history:
 pergunta = st.chat_input("Qual a sua dúvida cervejeira hoje?")
 
 if pergunta:
+    # Mostra a sua pergunta na tela
     with st.chat_message("user"):
         st.markdown(pergunta)
     
     with st.chat_message("assistant"):
-        # O 'stream=True' faz ele responder palavra por palavra na hora!
+        # Pede a resposta em modo streaming (pacotinhos)
         resposta = st.session_state.chat.send_message(pergunta, stream=True)
-        st.write_stream(resposta)
+        
+        # O SEGREDO ESTÁ AQUI: Uma função para "abrir os envelopes"
+        def extrair_texto(resposta_em_pedacos):
+            for pedaco in resposta_em_pedacos:
+                yield pedaco.text
+                
+        # O Streamlit digita na tela apenas o texto limpo, com o efeito rápido!
+        st.write_stream(extrair_texto(resposta))
