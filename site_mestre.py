@@ -20,23 +20,55 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🍺 IA Mestre Cervejeiro")
-st.write("Fale no microfone, use os botões rápidos ou digite sua dúvida!")
 
 # =====================================================================
 # 2. CONFIGURAÇÃO DAS CHAVES (API E BANCO DE DADOS)
 # =====================================================================
-# Puxando as chaves que você configurou nos Secrets do Streamlit
 CHAVE_API = st.secrets["CHAVE_API"]
 URL_BANCO = st.secrets["URL_BANCO"]
 
 genai.configure(api_key=CHAVE_API)
 
-instrucoes_mestre = """
+# =====================================================================
+# 3. IDENTIFICAÇÃO DO USUÁRIO NA BARRA LATERAL
+# =====================================================================
+with st.sidebar:
+    st.header("👤 Quem está aí?")
+    
+    # Caixa para o usuário digitar o nome (padrão é "Visitante")
+    nome_usuario = st.text_input("Digite seu nome para a IA te reconhecer:", value="Visitante")
+    
+    st.write(f"Olá, **{nome_usuario}**! Seja bem-vindo.")
+    st.write("---")
+    
+    st.header("⚙️ Painel do Mestre")
+    st.write("Use o botão abaixo para reiniciar o chat do zero se a conversa ficar muito longa.")
+    if st.button("🗑️ Limpar Histórico"):
+        # Se limpar o histórico, força a reinicialização do chat
+        if "chat" in st.session_state:
+            del st.session_state.chat
+        st.rerun()
+
+# Criamos a instrução personalizada incluindo o nome da pessoa que está usando o site
+instrucoes_mestre = f"""
 Você é um especialista em processos de produção de bebidas, focado em ajudar com dúvidas sobre insumos, tempos e boas práticas de fabricação de forma clara e técnica.
+O nome da pessoa com quem você está conversando é {nome_usuario}. Sempre que puder ou for natural, chame-a por esse nome ({nome_usuario}) para manter um atendimento personalizado e amigável.
 """
 
-# Função para salvar a conversa no Supabase
-def salvar_no_banco(pergunta, resposta):
+# =====================================================================
+# 4. GERENCIAMENTO DA MEMÓRIA DO CHAT
+# =====================================================================
+# Inicializa ou reinicializa o chat se o modelo não existir ou se o nome mudar
+if "chat" not in st.session_state or st.session_state.get("nome_atual") != nome_usuario:
+    modelo = genai.GenerativeModel(
+        model_name='gemini-2.5-flash', 
+        system_instruction=instrucoes_mestre
+    )
+    st.session_state.chat = modelo.start_chat(history=[])
+    st.session_state.nome_atual = nome_usuario # Guarda o nome atual para checar depois
+
+# Função para salvar a conversa no Supabase carregando o nome correto
+def salvar_no_banco(nome, pergunta, resposta):
     try:
         conn = psycopg2.connect(URL_BANCO)
         cursor = conn.cursor()
@@ -44,36 +76,14 @@ def salvar_no_banco(pergunta, resposta):
             INSERT INTO historico_conversas (usuario, mensagem_usuario, resposta_ia)
             VALUES (%s, %s, %s);
         """
-        cursor.execute(query, ("Visitante", pergunta, resposta))
+        cursor.execute(query, (nome, pergunta, response_text))
         conn.commit()
         cursor.close()
         conn.close()
     except Exception as e:
-        # Se der erro no banco, o site não cai, apenas avisa no terminal
         print(f"Erro ao salvar no banco de dados: {e}")
 
-# =====================================================================
-# 3. GERENCIAMENTO DA MEMÓRIA E BARRA LATERAL
-# =====================================================================
-# Inicializa o modelo e o chat se não existirem
-if "chat" not in st.session_state:
-    modelo = genai.GenerativeModel(
-        model_name='gemini-2.5-flash', 
-        system_instruction=instrucoes_mestre
-    )
-    st.session_state.chat = modelo.start_chat(history=[])
-
-# Barra lateral profissional com botão de Reset
-with st.sidebar:
-    st.header("⚙️ Painel do Mestre")
-    st.write("Use o botão abaixo para reiniciar o chat do zero se a conversa ficar muito longa.")
-    if st.button("🗑️ Limpar Histórico"):
-        modelo = genai.GenerativeModel(
-            model_name='gemini-2.5-flash', 
-            system_instruction=instrucoes_mestre
-        )
-        st.session_state.chat = modelo.start_chat(history=[])
-        st.rerun() # Recarrega a página com o chat limpo
+st.write(f"Fale no microfone, use os botões rápidos ou digite sua dúvida, **{nome_usuario}**!")
 
 # Exibe o histórico de mensagens na tela
 for mensagem in st.session_state.chat.history:
@@ -82,15 +92,13 @@ for mensagem in st.session_state.chat.history:
         st.markdown(mensagem.parts[0].text)
 
 # =====================================================================
-# 4. CONTROLES DE ENTRADA E BOTÕES RÁPIDOS
+# 5. CONTROLES DE ENTRADA E BOTÕES RÁPIDOS
 # =====================================================================
 pergunta_final = None
 
-# Componente de Áudio Fixo
 st.write("---")
 audio_gravado = st.audio_input("🎙️ Clique para falar e aguarde o envio automático")
 
-# Botões de sugestão para cliques rápidos
 st.write("👉 Ideias prontas para testar o robô:")
 col_b1, col_b2, col_b3 = st.columns(3)
 
@@ -99,15 +107,13 @@ with col_b1:
         pergunta_final = "O que é Dry Hopping e para que serve?"
 with col_b2:
     if st.button("🌡️ Guia de Fermentação"):
-        pergunta_final = "Me dê dicas rápidas sobre controle de temperatura na fermentação."
+        pergunta_final = "Me dê dicas rápidos sobre controle de temperatura na fermentação."
 with col_b3:
     if st.button("💧 Água para Brassagem"):
         pergunta_final = "Qual a importância do controle do PH da água?"
 
-# Caixa de texto padrão no rodapé
 texto_digitado = st.chat_input("Ou digite sua dúvida aqui...")
 
-# Definição de qual entrada foi acionada
 if texto_digitado:
     pergunta_final = texto_digitado
 elif audio_gravado and not pergunta_final:
@@ -135,7 +141,7 @@ elif audio_gravado and not pergunta_final:
         pergunta_final = resposta_traducao.text
 
 # =====================================================================
-# 5. PROCESSAMENTO, EXIBIÇÃO E SALVAMENTO NO BANCO
+# 6. PROCESSAMENTO, EXIBIÇÃO E SALVAMENTO NO BANCO
 # =====================================================================
 if pergunta_final:
     with st.chat_message("user"):
@@ -148,8 +154,7 @@ if pergunta_final:
             for pedaco in resposta_em_pedacos:
                 yield pedaco.text
                 
-        # st.write_stream retorna o texto completo após terminar o streaming
         texto_completo_resposta = st.write_stream(extrair_texto(resposta_streaming))
     
-    # SALVA NO BANCO DE DADOS APÓS EXIBIR A RESPOSTA
-    salvar_no_banco(pergunta_final, texto_completo_resposta)
+    # SALVA NO BANCO DE DADOS PASSANDO O NOME DIGITADO
+    salvar_no_banco(nome_usuario, pergunta_final, texto_completo_resposta)
