@@ -7,7 +7,7 @@ st.title("🍺 IA Mestre Cervejeiro")
 st.write("Bem-vindo à sua consultoria cervejeira online!")
 
 # 2. Configurando a Inteligência
-CHAVE_API = st.secrets["AQ.Ab8RN6Kz6N5jpFGOTWLXgp4hnOepcQxwm4H07k32_Oia_7A6bw"] 
+CHAVE_API = st.secrets["CHAVE_API"]
 genai.configure(api_key=CHAVE_API)
 
 instrucoes_mestre = """
